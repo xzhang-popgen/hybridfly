@@ -1,0 +1,226 @@
+//3R post-backcross simulation
+//generation 0 is the post-backcross bottle; female recombination only
+
+initialize() {
+    if (!exists("STATEFILE"))  defineConstant("STATEFILE", "parental_13MB.bin");
+    if (!exists("N"))          defineConstant("N", 50);
+    if (!exists("MALE_FRAC"))  defineConstant("MALE_FRAC", 0.60);  // 30M:20F at N=50
+    if (!exists("BASE_R"))      defineConstant("BASE_R", 2.3e-8);
+    if (!exists("REC_MULT"))    defineConstant("REC_MULT", 1.0);       // bottle generations
+    if (!exists("CROSS_REC_MULT")) defineConstant("CROSS_REC_MULT", 1.0); // F1 female backcross
+    if (!exists("NGEN"))        defineConstant("NGEN", 45);
+    if (!exists("REP"))         defineConstant("REP", 1);
+    if (!exists("SCENARIO"))    defineConstant("SCENARIO", "selected_fullhistory");
+
+    if (!exists("S_A")) defineConstant("S_A", -0.14);  // 3R_2.9
+    if (!exists("S_B")) defineConstant("S_B",  0.07);  // 3R_5.9
+    if (!exists("S_C")) defineConstant("S_C", -0.20);  // 3R_9.0
+    if (!exists("S_D")) defineConstant("S_D",  0.04);  // 3R_12.9
+    if (!exists("S_E")) defineConstant("S_E", -0.14);  // 3R_15
+    if (!exists("H"))     defineConstant("H", 0.5);
+    if (!exists("H_NEG")) defineConstant("H_NEG", H);
+    if (!exists("H_POS")) defineConstant("H_POS", H);
+
+    defineConstant("CHR_END", 12999999);
+
+    initializeSex("A");
+
+    initializeMutationRate(0.0);
+
+    initializeMutationType("mN", 0.5, "f", 0.0);
+    mN.convertToSubstitution = F;
+
+    initializeMutationType("mA", H_NEG, "f", S_A);
+    initializeMutationType("mB", H_POS, "f", S_B);
+    initializeMutationType("mC", H_NEG, "f", S_C);
+    initializeMutationType("mD", H_POS, "f", S_D);
+    initializeMutationType("mE", H_NEG, "f", S_E);
+    mA.convertToSubstitution = F;
+    mB.convertToSubstitution = F;
+    mC.convertToSubstitution = F;
+    mD.convertToSubstitution = F;
+    mE.convertToSubstitution = F;
+
+    initializeGenomicElementType("g1", mN, 1.0);
+    initializeGenomicElement(g1, 0, CHR_END);
+
+    initializeRecombinationRate(BASE_R * CROSS_REC_MULT, sex="F");
+    initializeRecombinationRate(0.0,                 sex="M");
+}
+
+function (o<Mutation>) emptyMutations(void) {
+    return sim.mutations[integer(0)];
+}
+
+function (void) copyHaplotype(o<Genome>$ target, o<Genome>$ donor) {
+    target.removeMutations(NULL);
+    dm = donor.mutations;
+    if (size(dm) > 0)
+        target.addMutations(dm);
+}
+
+function (o<Mutation>) makeF1Gamete(o<Genome>$ gSim,
+                                    o<Genome>$ gSec,
+                                    o<Individual>$ femaleForMap) {
+    bps = sim.chromosome.drawBreakpoints(femaleForMap);
+    if (size(bps) > 0)
+        bps = sort(bps);
+
+    out = emptyMutations();
+
+    useSim = (runif(1) < 0.5);
+    left = 0;
+
+    if (size(bps) > 0) {
+        for (bp in bps) {
+            right = bp - 1;
+            if (right >= left) {
+                if (useSim)
+                    mm = gSim.mutations;
+                else
+                    mm = gSec.mutations;
+                if (size(mm) > 0) {
+                    seg = mm[(mm.position >= left) & (mm.position <= right)];
+                    if (size(seg) > 0)
+                        out = c(out, seg);
+                }
+            }
+            useSim = !useSim;
+            left = bp;
+        }
+    }
+
+    if (useSim)
+        mm = gSim.mutations;
+    else
+        mm = gSec.mutations;
+    if (size(mm) > 0) {
+        seg = mm[(mm.position >= left) & (mm.position <= CHR_END)];
+        if (size(seg) > 0)
+            out = c(out, seg);
+    }
+
+    return unique(out);
+}
+
+function (float) trueFreq(o<MutationType>$ mt) {
+    g = p3.genomes;
+    return sum(g.countOfMutationsOfType(mt) > 0) / size(g);
+}
+
+function (integer) empiricalSampleN(integer$ gen) {
+    if (any(gen == c(1,2,3,4,6,10,12,14,16,18,20)))
+        return 1;
+    if (any(gen == c(8,17,26,35,44)))
+        return 5;
+    return 0;
+}
+
+function (float) sampledFreq(o<MutationType>$ mt, integer$ n) {
+    if (n <= 0)
+        return -1.0;
+    females = p3.individuals[p3.individuals.sex == "F"];
+    if (size(females) == 0)
+        return -1.0;
+    nUse = min(c(n, size(females)));
+    inds = sample(females, nUse);
+    gg = inds.genomes;
+    return sum(gg.countOfMutationsOfType(mt) > 0) / size(gg);
+}
+
+function (float) markerR2(o<MutationType>$ mt1, o<MutationType>$ mt2) {
+    g = p3.genomes;
+    a = (g.countOfMutationsOfType(mt1) > 0);
+    b = (g.countOfMutationsOfType(mt2) > 0);
+    pA = sum(a) / size(g);
+    pB = sum(b) / size(g);
+    denom = pA * (1.0-pA) * pB * (1.0-pB);
+    if (denom <= 0.0)
+        return -1.0;
+    pAB = sum(a & b) / size(g);
+    DD = pAB - pA*pB;
+    return DD*DD/denom;
+}
+
+function (void) emit(integer$ gen) {
+    nSamp = empiricalSampleN(gen);
+
+    fA = trueFreq(mA); fB = trueFreq(mB); fC = trueFreq(mC);
+    fD = trueFreq(mD); fE = trueFreq(mE);
+
+    sA = sampledFreq(mA, nSamp); sB = sampledFreq(mB, nSamp);
+    sC = sampledFreq(mC, nSamp); sD = sampledFreq(mD, nSamp);
+    sE = sampledFreq(mE, nSamp);
+
+    rAB = markerR2(mA,mB); rBC = markerR2(mB,mC);
+    rCD = markerR2(mC,mD); rDE = markerR2(mD,mE);
+
+    catn(REP + "," + SCENARIO + "," + N + "," + MALE_FRAC + "," +
+         CROSS_REC_MULT + "," + REC_MULT + "," + BASE_R + "," +
+         S_A + "," + S_B + "," + S_C + "," + S_D + "," + S_E + "," +
+         gen + "," + nSamp + "," +
+         fA + "," + fB + "," + fC + "," + fD + "," + fE + "," +
+         sA + "," + sB + "," + sC + "," + sD + "," + sE + "," +
+         rAB + "," + rBC + "," + rCD + "," + rDE);
+}
+
+1 late() {
+    sim.readFromPopulationFile(STATEFILE);
+
+    community.tick = 1;
+    sim.cycle = 1;
+
+    sim.chromosome.setRecombinationRate(BASE_R * CROSS_REC_MULT, sex="F");
+
+    p2.genomes.addNewDrawnMutation(mA,   500000);
+    p2.genomes.addNewDrawnMutation(mB,  3500000);
+    p2.genomes.addNewDrawnMutation(mC,  6500000);
+    p2.genomes.addNewDrawnMutation(mD, 10500000);
+    p2.genomes.addNewDrawnMutation(mE, 12500000);
+}
+
+2 early() {
+    sim.addSubpopSplit("p3", N, p1, MALE_FRAC);
+}
+
+2 late() {
+    mapFemale = p1.sampleIndividuals(1, sex="F");
+
+    for (ind in p3.individuals) {
+        simDonorInd = p1.sampleIndividuals(1, sex="F");
+        secDonorInd = p2.sampleIndividuals(1, sex="M");
+        simMale     = p1.sampleIndividuals(1, sex="M");
+
+        gSimF1 = sample(simDonorInd.genomes, 1);
+        gSecF1 = sample(secDonorInd.genomes, 1);
+        paternal = sample(simMale.genomes, 1);
+
+        maternalMuts = makeF1Gamete(gSimF1, gSecF1, mapFemale);
+
+        ind.genome1.removeMutations(NULL);
+        if (size(maternalMuts) > 0)
+            ind.genome1.addMutations(maternalMuts);
+        copyHaplotype(ind.genome2, paternal);
+    }
+
+    sim.chromosome.setRecombinationRate(BASE_R * REC_MULT, sex="F");
+
+    catn("rep,scenario,N,male_frac,cross_rec_mult,rec_mult,base_r,S_A,S_B,S_C,S_D,S_E," +
+         "generation,sample_n,f_2.9,f_5.9,f_9.0,f_12.9,f_15," +
+         "obs_2.9,obs_5.9,obs_9.0,obs_12.9,obs_15," +
+         "r2_2.9_5.9,r2_5.9_9.0,r2_9.0_12.9,r2_12.9_15");
+    emit(0);
+}
+
+3 early() {
+    p1.setSubpopulationSize(0);
+    p2.setSubpopulationSize(0);
+}
+
+3:1000 late() {
+    gen = sim.generation - 2;
+    if (gen <= NGEN)
+        emit(gen);
+    if (gen == NGEN)
+        sim.simulationFinished();
+}

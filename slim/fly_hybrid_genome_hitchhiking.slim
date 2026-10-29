@@ -1,0 +1,125 @@
+//genome-wide sparse linked-selection sensitivity
+
+initialize() {
+    if (!exists("N"))          defineConstant("N", 50);
+    if (!exists("P0"))         defineConstant("P0", 0.25);
+    if (!exists("MALE_FRAC"))  defineConstant("MALE_FRAC", 0.60);
+    if (!exists("BASE_R"))     defineConstant("BASE_R", 2.3e-8);
+    if (!exists("REC_MULT"))   defineConstant("REC_MULT", 1.0);
+    if (!exists("NGEN"))       defineConstant("NGEN", 45);
+    if (!exists("REP"))        defineConstant("REP", 1);
+    if (!exists("NSEL"))       defineConstant("NSEL", 1);      // 0,1,3,5 recommended
+    if (!exists("SDEL"))       defineConstant("SDEL", -0.20);  // also test -0.5
+    if (!exists("H"))          defineConstant("H", 0.5);
+    if (!exists("SCENARIO"))   defineConstant("SCENARIO", "sparse_genome");
+
+    defineConstant("ARM_LEN", 20000000);
+    defineConstant("NARMS", 5);
+    defineConstant("MARKER_SPACING", 1000000);
+    defineConstant("MARKERS_PER_ARM", 20);
+    defineConstant("NMARKERS", NARMS * MARKERS_PER_ARM);
+
+    initializeMutationRate(0.0);
+    initializeSex("A");
+
+    initializeMutationType("mN", 0.5, "f", 0.0);
+    initializeMutationType("mD", H,   "f", SDEL);
+    mN.convertToSubstitution = F;
+    mD.convertToSubstitution = F;
+
+    initializeGenomicElementType("g1", mN, 1.0);
+    initializeGenomicElement(g1, 0, NARMS*ARM_LEN - 1);
+
+    ends = c(19999998,19999999,
+             39999998,39999999,
+             59999998,59999999,
+             79999998,79999999,
+             99999999);
+
+    femaleRates = c(BASE_R*REC_MULT,0.5,
+                    BASE_R*REC_MULT,0.5,
+                    BASE_R*REC_MULT,0.5,
+                    BASE_R*REC_MULT,0.5,
+                    BASE_R*REC_MULT);
+    maleRates   = c(0.0,0.5,
+                    0.0,0.5,
+                    0.0,0.5,
+                    0.0,0.5,
+                    0.0);
+
+    initializeRecombinationRate(femaleRates, ends, sex="F");
+    initializeRecombinationRate(maleRates,   ends, sex="M");
+}
+
+function (float) genomeMeanAncestry(void) {
+    muts = sim.mutationsOfType(mN);
+    if (size(muts) == 0)
+        return 0.0;
+    return sum(sim.mutationFrequencies(p1, muts)) / NMARKERS;
+}
+
+function (float) armMeanAncestry(integer$ arm) {
+    lo = arm * ARM_LEN;
+    hi = (arm+1) * ARM_LEN - 1;
+    muts = sim.mutationsOfType(mN);
+    if (size(muts) == 0)
+        return 0.0;
+    mm = muts[(muts.position >= lo) & (muts.position <= hi)];
+    if (size(mm) == 0)
+        return 0.0;
+    return sum(sim.mutationFrequencies(p1, mm)) / MARKERS_PER_ARM;
+}
+
+function (float) selectedMeanFreq(void) {
+    if (NSEL == 0)
+        return -1.0;
+    muts = sim.mutationsOfType(mD);
+    if (size(muts) == 0)
+        return 0.0;
+    return sum(sim.mutationFrequencies(p1, muts)) / NSEL;
+}
+
+function (void) emit(integer$ gen) {
+    catn(REP + "," + SCENARIO + "," + N + "," + P0 + "," + MALE_FRAC + "," +
+         REC_MULT + "," + NSEL + "," + SDEL + "," + gen + "," +
+         genomeMeanAncestry() + "," + selectedMeanFreq() + "," +
+         armMeanAncestry(0) + "," + armMeanAncestry(1) + "," +
+         armMeanAncestry(2) + "," + armMeanAncestry(3) + "," + armMeanAncestry(4));
+}
+
+1 early() {
+    sim.addSubpop("p1", N, sexRatio=MALE_FRAC);
+}
+
+1 late() {
+    nCarriers = asInteger(round(2.0 * N * P0));
+    if (nCarriers > N)
+        stop("This initialization assumes P0 <= 0.5.");
+    carriers = sample(p1.individuals, nCarriers);
+    ancGenomes = carriers.genome1;
+
+    for (arm in 0:(NARMS-1)) {
+        for (j in 0:(MARKERS_PER_ARM-1)) {
+            pos = asInteger(arm*ARM_LEN + j*MARKER_SPACING + 500000);
+            ancGenomes.addNewDrawnMutation(mN, pos);
+        }
+    }
+
+    selPos = c(10000000,30000000,50000000,70000000,90000000);
+    if (NSEL > 0) {
+        for (i in 0:(NSEL-1))
+            ancGenomes.addNewDrawnMutation(mD, asInteger(selPos[i]));
+    }
+
+    catn("rep,scenario,N,P0,male_frac,rec_mult,n_selected,s_del,generation," +
+         "genome_mean_ancestry,selected_mean_freq,arm1,arm2,arm3,arm4,arm5");
+    emit(0);
+}
+
+2:101 late() {
+    gen = sim.generation - 1;
+    if (gen <= NGEN)
+        emit(gen);
+    if (gen == NGEN)
+        sim.simulationFinished();
+}
